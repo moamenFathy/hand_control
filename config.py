@@ -1,13 +1,14 @@
 """
 Configuration and settings for the Hand Gesture Desktop Controller.
+Optimized with finger-proportional normalization and robust pinch detection.
 """
 from dataclasses import dataclass
 from enum import Enum
 
 
 class TrackingMode(Enum):
-    PINCH_TO_MOVE = "pinch_to_move"        # Mouse only moves after holding pinch for 2 seconds (Absolute)
-    RELATIVE_PINCH = "relative_pinch"      # Relative mouse movement after 2s hold (Trackpad clutch)
+    PINCH_TO_MOVE = "pinch_to_move"        # Mouse moves when forefinger and thumb are held pinched (Absolute)
+    RELATIVE_PINCH = "relative_pinch"      # Relative mouse movement while pinching & holding (Trackpad clutch)
     CONTINUOUS = "continuous"              # Mouse tracks pointing index finger continuously
 
 
@@ -33,46 +34,39 @@ class InteractionConfig:
     # Primary control mode
     tracking_mode: TrackingMode = TrackingMode.PINCH_TO_MOVE
 
-    # Hold duration required to engage mouse movement (in seconds)
-    hold_to_move_duration: float = 2.0
-
     # Margins inside camera frame to map to full screen (0.0 to 0.5)
     margin_x: float = 0.06
     margin_y: float = 0.08
 
     # Speed / sensitivity multipliers for precision control
-    cursor_speed_factor: float = 0.85     # Toned down for calm, accurate absolute movement
-    relative_sensitivity: float = 1.15    # Lowered for precise, steady relative clutch control
+    cursor_speed_factor: float = 0.90     # Calm, accurate absolute movement
+    relative_sensitivity: float = 1.30    # Steady relative clutch control
 
-    # Pinch (Thumb tip to Index tip) distance threshold normalized by hand size
-    pinch_start_threshold: float = 0.050
-    pinch_release_threshold: float = 0.080
+    # Pinch Distance Thresholds (Ratio of Thumb-Index distance to Index Finger Length)
+    # Touching: ~0.10 - 0.30 | Open hand: ~0.75 - 2.00+
+    pinch_start_threshold: float = 0.35   # Trigger pinch below 0.35
+    pinch_release_threshold: float = 0.48 # Release pinch above 0.48
 
-    # Right-click pinch (Thumb tip to Middle tip)
-    right_pinch_start_threshold: float = 0.050
-    right_pinch_release_threshold: float = 0.080
+    # Right-click pinch (Thumb tip to Middle tip ratio)
+    right_pinch_start_threshold: float = 0.35
+    right_pinch_release_threshold: float = 0.48
 
-    # Click Timing (Double-tap pinch for left click)
-    tap_max_duration: float = 0.35        # Max pinch duration to register as a single tap
-    double_tap_interval: float = 0.55     # Max seconds between 2 pinch taps to trigger Left Click
+    # Click Timings
+    tap_max_duration: float = 0.35        # Pinch duration <= 0.35s registers as a Click
+    double_click_interval: float = 0.45   # Time window between taps for Double Click
 
     # Scrolling
-    scroll_threshold_y: float = 0.03      # Minimum movement to trigger scroll in two-finger mode
+    scroll_threshold_y: float = 0.03      # Minimum vertical movement to trigger scroll
     scroll_speed: int = 15                # Units to scroll per tick (steady, controlled)
 
 
 @dataclass
 class SmoothingConfig:
-    # Higher value = smoother and calmer; lower value = more raw/jumpy
-    smoothing_factor: float = 7.5
-
-    # Minimum screen pixel movement to apply (eliminates micro-jitter at rest for high precision)
-    deadzone_pixels: float = 3.5
-
-    # One-Euro Filter parameters (Tuned for rock-solid precision & accuracy)
+    smoothing_factor: float = 6.0
+    deadzone_pixels: float = 3.0
     use_one_euro: bool = True
-    min_cutoff: float = 0.7               # Lower cutoff for smooth, steady low-speed positioning
-    beta: float = 0.025                   # Gentle velocity slope for controlled, accurate movements
+    min_cutoff: float = 0.8
+    beta: float = 0.030
     d_cutoff: float = 1.0
 
 

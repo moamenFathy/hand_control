@@ -1,7 +1,7 @@
 """
 OS-level mouse controller using PyAutoGUI.
 Handles coordinate mapping from camera space to screen space,
-applies high-precision One-Euro smoothing, executes clicks/double-taps/drags/scrolls,
+applies high-precision One-Euro smoothing, executes clicks/double-clicks/scrolls,
 and enforces failsafe boundaries.
 """
 from typing import Optional, Tuple
@@ -154,12 +154,11 @@ class MouseController:
 
     def handle_gesture(self, gesture: GestureResult, pointer_norm: Tuple[float, float]) -> Tuple[int, int]:
         """
-        Main entry: update cursor position and execute click/double-tap/scroll events.
-        Cursor only moves when 2.0s hold is reached (is_movement_engaged is True).
+        Main entry: update cursor position and execute click/double-click/scroll events.
         """
         mode = self.interaction_cfg.tracking_mode
 
-        # 1. Cursor Movement handling (Only active when 2s hold engaged)
+        # 1. Cursor Movement handling
         if gesture.is_movement_engaged:
             if not self.was_engaged:
                 self.smoother.reset()
@@ -173,7 +172,7 @@ class MouseController:
                     self.move_relative(dx, dy)
                 self.last_pointer_norm = pointer_norm
             else:
-                # Absolute Pinch-to-Move or Continuous with precision smoothing
+                # Absolute Pinch-to-Move or Continuous
                 raw_x, raw_y = self.map_to_screen(pointer_norm[0], pointer_norm[1])
                 self.move_cursor(raw_x, raw_y)
         else:
@@ -182,8 +181,10 @@ class MouseController:
                 self.smoother.reset()
                 self.last_pointer_norm = None
 
-        # 2. Event triggers (Double-Tap Left Click, Right Click, Scroll)
-        if gesture.event == GestureEvent.LEFT_CLICK:
+        # 2. Event triggers (Left Click, Double Click, Right Click, Scroll)
+        if gesture.event == GestureEvent.DOUBLE_CLICK:
+            self.double_click()
+        elif gesture.event == GestureEvent.CLICK:
             self.click(button="left")
         elif gesture.event == GestureEvent.RIGHT_CLICK:
             self.click(button="right")

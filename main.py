@@ -1,11 +1,11 @@
 """
 Hand Gesture Desktop Controller - Main Application
-Entry point for real-time webcam hand tracking, 2-Second Hold-to-Move, and Double-Tap Left Click.
+Optimized for instant, natural Pinch-to-Move and responsive Tap-to-Click.
 """
 import argparse
 import sys
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
@@ -30,8 +30,8 @@ class CalibrationWizard:
         self.is_active = False
         self.step = 0  # 1: Open hand, 2: Closed pinch
         self.step_start_time = 0.0
-        self.open_samples = []
-        self.pinch_samples = []
+        self.open_samples: List[float] = []
+        self.pinch_samples: List[float] = []
 
     def start(self):
         self.is_active = True
@@ -69,9 +69,30 @@ class CalibrationWizard:
         return False, ""
 
     def get_calibrated_thresholds(self) -> Tuple[float, float]:
-        open_avg = float(np.median(self.open_samples)) if self.open_samples else 0.25
-        pinch_avg = float(np.median(self.pinch_samples)) if self.pinch_samples else 0.03
+        open_avg = float(np.median(self.open_samples)) if self.open_samples else 1.00
+        pinch_avg = float(np.median(self.pinch_samples)) if self.pinch_samples else 0.20
         return open_avg, pinch_avg
+
+
+class ClickRipple:
+    """Animated visual ripple effect when a click occurs."""
+
+    def __init__(self, pos: Tuple[int, int], color: Tuple[int, int, int] = (0, 255, 0), duration: float = 0.35):
+        self.pos = pos
+        self.color = color
+        self.start_time = time.perf_counter()
+        self.duration = duration
+
+    def is_alive(self) -> bool:
+        return (time.perf_counter() - self.start_time) < self.duration
+
+    def draw(self, frame: np.ndarray):
+        elapsed = time.perf_counter() - self.start_time
+        progress = elapsed / self.duration
+        if progress < 1.0:
+            radius = int(10 + progress * 40)
+            thickness = max(1, int(3 * (1.0 - progress)))
+            cv2.circle(frame, self.pos, radius, self.color, thickness, cv2.LINE_AA)
 
 
 class HandGestureApp:
@@ -99,11 +120,12 @@ class HandGestureApp:
             self.interaction_cfg, self.smoothing_cfg, self.safety_cfg
         )
         self.calibrator = CalibrationWizard()
+        self.ripples: List[ClickRipple] = []
 
         self.is_paused = False
         self.fps = 0.0
         self.prev_frame_time = time.perf_counter()
-        self.status_notification = "Ready - Hold Pinch 2s to Move | Double-Tap to Click"
+        self.status_notification = "Ready - Pinch to Move | Tap to Click"
         self.notification_time = time.perf_counter()
 
     def notify(self, message: str, duration: float = 2.0):
@@ -123,8 +145,8 @@ class HandGestureApp:
         self.recognizer.config.tracking_mode = next_mode
         self.mouse.interaction_cfg.tracking_mode = next_mode
         mode_names = {
-            TrackingMode.PINCH_TO_MOVE: "Hold 2s to Move (Absolute)",
-            TrackingMode.RELATIVE_PINCH: "Hold 2s to Move (Relative Clutch)",
+            TrackingMode.PINCH_TO_MOVE: "Pinch-to-Move (Absolute)",
+            TrackingMode.RELATIVE_PINCH: "Pinch-to-Move (Relative Clutch)",
             TrackingMode.CONTINUOUS: "Continuous Pointing",
         }
         name = mode_names[next_mode]
@@ -141,20 +163,21 @@ class HandGestureApp:
         self.mouse.interaction_cfg.margin_y = float(new_my)
         w_pct = int((1.0 - 2 * new_mx) * 100)
         h_pct = int((1.0 - 2 * new_my) * 100)
-        self.notify(f"Active Region Size: {w_pct}% x {h_pct}%", duration=1.5)
+        self.notify(f"Active Region: {w_pct}% x {h_pct}%", duration=1.5)
 
     def run(self):
         """Main camera processing and interaction loop."""
         print("=" * 65)
         print(" Hand Gesture Desktop Controller")
         print(" Gestures:")
-        print("   - Hold Forefinger + Thumb 2s: Unlock & Move Mouse")
-        print("   - Double-Tap Pinch: Left Click")
+        print("   - Pinch & Move: Smooth Cursor Movement (0ms lag)")
+        print("   - Quick Pinch Tap: Left Click")
+        print("   - Double Pinch Tap: Double Click")
         print("   - Thumb + Middle Pinch: Right Click")
         print("   - Two Fingers Up/Down: Scroll")
         print(" Controls:")
         print("   [SPACE]   - Pause / Resume mouse control")
-        print("   [M]       - Toggle Mode (Hold 2s / Relative / Continuous)")
+        print("   [M]       - Toggle Mode (Pinch-to-Move / Relative / Continuous)")
         print("   [+] / [-] - Expand / Shrink active screen region")
         print("   [C]       - Start live calibration wizard")
         print("   [ESC/Q]   - Quit application")
@@ -174,7 +197,7 @@ class HandGestureApp:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_cfg.frame_height)
         cap.set(cv2.CAP_PROP_FPS, self.camera_cfg.fps)
 
-        window_name = "Hand Gesture Desktop Controller - Hold 2s to Move"
+        window_name = "Hand Gesture Desktop Controller"
         if self.show_window:
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
@@ -204,15 +227,19 @@ class HandGestureApp:
                 # 2. Process gestures
                 gesture = self.recognizer.process(primary_hand, timestamp=now)
 
-                # Show event notifications
-                if gesture.event == GestureEvent.LEFT_CLICK:
-                    self.notify("👆 LEFT CLICK (Double Tap)!", duration=1.2)
-                elif gesture.event == GestureEvent.TAP_FIRST:
-                    self.notify("Tap 1/2 (Tap again to Left Click)", duration=0.8)
-                elif gesture.event == GestureEvent.PINCH_ENGAGED:
-                    self.notify("🟢 2s Hold Reached: Cursor Active!", duration=1.5)
+                # Visual click ripples and notifications
+                px = int(gesture.pointer_pos[0] * w)
+                py = int(gesture.pointer_pos[1] * h)
+
+                if gesture.event == GestureEvent.CLICK:
+                    self.notify("👆 LEFT CLICK!", duration=1.0)
+                    self.ripples.append(ClickRipple((px, py), color=(0, 255, 0)))
+                elif gesture.event == GestureEvent.DOUBLE_CLICK:
+                    self.notify("⚡ DOUBLE CLICK!", duration=1.2)
+                    self.ripples.append(ClickRipple((px, py), color=(0, 255, 255)))
                 elif gesture.event == GestureEvent.RIGHT_CLICK:
-                    self.notify("👉 RIGHT CLICK", duration=1.0)
+                    self.notify("👉 RIGHT CLICK!", duration=1.0)
+                    self.ripples.append(ClickRipple((px, py), color=(255, 150, 0)))
 
                 # 3. Handle calibration if active
                 if self.calibrator.is_active:
@@ -222,7 +249,7 @@ class HandGestureApp:
                         open_val, pinch_val = self.calibrator.get_calibrated_thresholds()
                         self.recognizer.calibrate(open_val, pinch_val)
                         self.notify(
-                            f"Calibrated: Open={open_val:.3f}, Pinch={pinch_val:.3f}",
+                            f"Calibrated: Open={open_val:.2f}, Pinch={pinch_val:.2f}",
                             duration=3.0,
                         )
 
@@ -235,9 +262,12 @@ class HandGestureApp:
                         self.recognizer.reset()
                         self.mouse.smoother.reset()
 
-                # 5. Render HUD Overlay
+                # 5. Render HUD Overlay & Click Ripples
                 if self.show_window:
                     self._draw_hud(frame, primary_hand, gesture, screen_pos, w, h)
+                    self.ripples = [r for r in self.ripples if r.is_alive()]
+                    for ripple in self.ripples:
+                        ripple.draw(frame)
                     cv2.imshow(window_name, frame)
 
                 # 6. Key bindings
@@ -254,9 +284,9 @@ class HandGestureApp:
                 elif key == self.safety_cfg.toggle_mode_key:
                     self.toggle_mode()
                 elif key in (ord('+'), ord('=')):
-                    self.adjust_region_size(-0.02)  # Expand region
+                    self.adjust_region_size(-0.02)
                 elif key in (ord('-'), ord('_')):
-                    self.adjust_region_size(+0.02)  # Shrink region
+                    self.adjust_region_size(+0.02)
                 elif key == self.safety_cfg.calibrate_key:
                     print("Starting calibration wizard...")
                     self.calibrator.start()
@@ -308,43 +338,14 @@ class HandGestureApp:
                 pinch_active=is_pinching,
             )
 
-            # Draw target cursor point & progress ring
+            # Draw target cursor point
             px = int(gesture.pointer_pos[0] * w)
             py = int(gesture.pointer_pos[1] * h)
 
             if gesture.is_movement_engaged:
-                # Fully unlocked & moving
-                cv2.circle(frame, (px, py), 18, (0, 255, 0), 2, cv2.LINE_AA)
-                cv2.circle(frame, (px, py), 5, (0, 255, 0), -1, cv2.LINE_AA)
-            elif gesture.state == GestureState.HOLDING_TO_MOVE:
-                # Counting up to 2 seconds: draw filling progress ring
-                radius = 22
-                cv2.circle(frame, (px, py), radius, (60, 60, 60), 2, cv2.LINE_AA)
-                angle = int(gesture.hold_progress * 360)
-                if angle > 0:
-                    cv2.ellipse(
-                        frame,
-                        (px, py),
-                        (radius, radius),
-                        -90,
-                        0,
-                        angle,
-                        (0, 255, 255),
-                        3,
-                        cv2.LINE_AA,
-                    )
-                # Countdown text near fingers
-                rem = max(0.0, self.interaction_cfg.hold_to_move_duration - gesture.held_duration)
-                cv2.putText(
-                    frame,
-                    f"Hold {rem:.1f}s",
-                    (px + 15, py - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (0, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+                # Green active reticle
+                cv2.circle(frame, (px, py), 16, (0, 255, 0), 2, cv2.LINE_AA)
+                cv2.circle(frame, (px, py), 4, (0, 255, 0), -1, cv2.LINE_AA)
             else:
                 cv2.circle(frame, (px, py), 8, (150, 150, 150), 1, cv2.LINE_AA)
 
@@ -367,8 +368,8 @@ class HandGestureApp:
 
         # Mode Badge
         mode_abbr = {
-            TrackingMode.PINCH_TO_MOVE: "HOLD 2s TO MOVE",
-            TrackingMode.RELATIVE_PINCH: "RELATIVE CLUTCH (2s)",
+            TrackingMode.PINCH_TO_MOVE: "PINCH-TO-MOVE",
+            TrackingMode.RELATIVE_PINCH: "RELATIVE CLUTCH",
             TrackingMode.CONTINUOUS: "CONTINUOUS",
         }.get(self.interaction_cfg.tracking_mode, "UNKNOWN")
         cv2.putText(
@@ -393,12 +394,8 @@ class HandGestureApp:
             badge_text = "NO HAND DETECTED"
             badge_color = (120, 120, 120)
         elif gesture.state == GestureState.PINCH_MOVE:
-            badge_text = "🟢 CURSOR UNLOCKED: MOVING MOUSE"
+            badge_text = "🟢 PINCH ACTIVE: MOVING CURSOR"
             badge_color = (0, 255, 0)
-        elif gesture.state == GestureState.HOLDING_TO_MOVE:
-            rem = max(0.0, self.interaction_cfg.hold_to_move_duration - gesture.held_duration)
-            badge_text = f"⏳ HOLDING TO MOVE ({rem:.1f}s remaining)"
-            badge_color = (0, 255, 255)
         elif gesture.state == GestureState.RIGHT_PINCHING:
             badge_text = "RIGHT PINCH"
             badge_color = (255, 150, 0)
@@ -406,7 +403,7 @@ class HandGestureApp:
             badge_text = "SCROLLING"
             badge_color = (255, 255, 0)
         else:
-            badge_text = "DISENGAGED (Hold 2s to move | Double-Tap to click)"
+            badge_text = "RELAXED (Pinch to Move | Tap to Click)"
             badge_color = (180, 180, 180)
 
         cv2.putText(
@@ -414,7 +411,7 @@ class HandGestureApp:
             badge_text,
             (180, 34),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.50,
             badge_color,
             2,
             cv2.LINE_AA,
@@ -434,17 +431,25 @@ class HandGestureApp:
 
         # 4. Pinch Distance Meter (Bottom-Left)
         if hand is not None:
-            bar_x, bar_y, bar_w, bar_h = 15, h - 54, 130, 14
+            bar_x, bar_y, bar_w, bar_h = 15, h - 54, 150, 14
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (40, 40, 40), -1)
-            fill_w = int(np.clip(gesture.pinch_distance / 0.15, 0.0, 1.0) * bar_w)
-            meter_color = (0, 255, 0) if gesture.is_left_pinched else (0, 180, 255)
+            # Scale 0.0 to 1.0 ratio
+            fill_w = int(np.clip(gesture.pinch_distance / 1.0, 0.0, 1.0) * bar_w)
+            meter_color = (0, 255, 0) if gesture.is_left_pinched else (180, 180, 180)
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), meter_color, -1)
-            thresh_x = int((self.interaction_cfg.pinch_start_threshold / 0.15) * bar_w)
-            cv2.line(frame, (bar_x + thresh_x, bar_y - 2), (bar_x + thresh_x, bar_y + bar_h + 2), (0, 0, 255), 2)
-            status_tag = "ENGAGED" if gesture.is_movement_engaged else ("HOLDING" if gesture.is_left_pinched else "OPEN")
+            
+            # Trigger line (Green at pinch_start_threshold)
+            start_x = int((self.interaction_cfg.pinch_start_threshold / 1.0) * bar_w)
+            cv2.line(frame, (bar_x + start_x, bar_y - 2), (bar_x + start_x, bar_y + bar_h + 2), (0, 255, 0), 2)
+            
+            # Release line (Red at pinch_release_threshold)
+            rel_x = int((self.interaction_cfg.pinch_release_threshold / 1.0) * bar_w)
+            cv2.line(frame, (bar_x + rel_x, bar_y - 2), (bar_x + rel_x, bar_y + bar_h + 2), (0, 0, 255), 2)
+            
+            status_tag = "PINCHED" if gesture.is_left_pinched else "OPEN"
             cv2.putText(
                 frame,
-                f"Pinch: {gesture.pinch_distance:.3f} ({status_tag})",
+                f"Pinch Ratio: {gesture.pinch_distance:.2f} ({status_tag})",
                 (bar_x, bar_y - 6),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.35,
@@ -458,7 +463,7 @@ class HandGestureApp:
         cv2.rectangle(bot_overlay, (0, h - 26), (w, h), (15, 15, 15), -1)
         cv2.addWeighted(bot_overlay, 0.75, frame, 0.25, 0, frame)
 
-        if time.perf_counter() - self.notification_time < 3.0:
+        if time.perf_counter() - self.notification_time < 2.5:
             display_msg = self.status_notification
             msg_color = (0, 255, 255)
         else:
