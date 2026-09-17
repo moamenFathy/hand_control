@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Model downloads (auto-downloaded on first run)
+hand_landmarker.task
+
+# IDE & Editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Temporary & workspace files
+.kilo/
